@@ -183,6 +183,10 @@ function createServerEnv() {
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
 				),
 
+			CAP_BYPASS_SIGNIN: boolString(false).describe(
+				"Development only: hand Cap Desktop an API key for the first user without a browser login. Ignored when NODE_ENV is production.",
+			),
+
 			/// Ignore
 			NODE_ENV: z.string(),
 			WORKFLOWS_RPC_URL: z.string().optional(),

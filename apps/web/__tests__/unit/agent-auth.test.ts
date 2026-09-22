@@ -6,11 +6,10 @@ import {
 import { describe, expect, it } from "vitest";
 import {
 	agentScopeProfiles,
-	buildAgentCallbackUrl,
 	createAgentAccessToken,
 	hashAgentSecret,
 	isAgentCodeVerifier,
-	isAgentLoopbackRedirectUri,
+	isAgentOobRedirectUri,
 	isAgentScopeProfile,
 	parseAgentAuthorizationRequest,
 	parseAgentScopes,
@@ -22,29 +21,22 @@ const verifier = "v".repeat(43);
 const challenge = createHash("sha256").update(verifier).digest("base64url");
 
 describe("agent browser authorization", () => {
-	it("only accepts explicit loopback callback URLs", () => {
-		expect(isAgentLoopbackRedirectUri("http://127.0.0.1:49152/callback")).toBe(
-			true,
-		);
-		expect(isAgentLoopbackRedirectUri("http://[::1]:49152/callback")).toBe(
-			true,
-		);
+	it("only accepts the out-of-band redirect URI", () => {
+		expect(isAgentOobRedirectUri("urn:ietf:wg:oauth:2.0:oob")).toBe(true);
 		for (const value of [
-			"https://127.0.0.1:49152/callback",
+			"http://127.0.0.1:49152/callback",
 			"http://localhost:49152/callback",
-			"http://127.0.0.1/callback",
-			"http://127.0.0.1:49152/other",
-			"http://127.0.0.1:49152/callback?next=https://example.com",
-			"http://example.com:49152/callback",
+			"https://example.com/callback",
+			"",
 		]) {
-			expect(isAgentLoopbackRedirectUri(value)).toBe(false);
+			expect(isAgentOobRedirectUri(value)).toBe(false);
 		}
 	});
 
 	it("requires PKCE S256, state, and known scopes", () => {
 		const request = parseAgentAuthorizationRequest({
 			client_id: "cap-cli",
-			redirect_uri: "http://127.0.0.1:49152/callback",
+			redirect_uri: "urn:ietf:wg:oauth:2.0:oob",
 			response_type: "code",
 			state,
 			code_challenge: challenge,
@@ -58,7 +50,7 @@ describe("agent browser authorization", () => {
 		expect(
 			parseAgentAuthorizationRequest({
 				client_id: "cap-cli",
-				redirect_uri: "http://127.0.0.1:49152/callback",
+				redirect_uri: "urn:ietf:wg:oauth:2.0:oob",
 				response_type: "code",
 				state,
 				code_challenge: challenge,
@@ -85,22 +77,6 @@ describe("agent browser authorization", () => {
 		expect(isAgentCodeVerifier(verifier)).toBe(true);
 		expect(verifyAgentCodeChallenge(verifier, challenge)).toBe(true);
 		expect(verifyAgentCodeChallenge("x".repeat(43), challenge)).toBe(false);
-	});
-
-	it("builds a callback without accepting an open redirect", () => {
-		const callback = buildAgentCallbackUrl("http://127.0.0.1:49152/callback", {
-			state,
-			code: "one-time-code",
-		});
-		expect(callback).toBe(
-			`http://127.0.0.1:49152/callback?state=${state}&code=one-time-code`,
-		);
-		expect(
-			buildAgentCallbackUrl("https://example.com/callback", {
-				state,
-				code: "code",
-			}),
-		).toBeNull();
 	});
 
 	it("hashes credentials and never embeds the raw value", () => {

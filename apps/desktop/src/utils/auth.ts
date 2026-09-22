@@ -1,15 +1,13 @@
 import { createMutation } from "@tanstack/solid-query";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { fetch } from "@tauri-apps/plugin-http";
 import * as shell from "@tauri-apps/plugin-shell";
 import { z } from "zod";
-import callbackTemplate from "~/components/callback.template";
 import { authStore, generalSettingsStore } from "~/store";
+import type { AuthStore } from "~/utils/tauri";
 import { identifyUser, trackEvent } from "./analytics";
 import { clientEnv } from "./env";
-import { shouldUseLocalServerSessionForUrl } from "./server-url-routing";
 import { commands } from "./tauri";
 
 const paramsValidator = z.union([
@@ -27,16 +25,41 @@ const paramsValidator = z.union([
 
 type AuthParams = z.infer<typeof paramsValidator>;
 
+const bypassSignIn = import.meta.env.VITE_BYPASS_SIGNIN === "true";
+
+export async function signInWithoutBrowser() {
+	if (!bypassSignIn || (await authStore.get())) return false;
+	const url = await createSessionRequestUrl();
+	url.searchParams.set("format", "json");
+	// Tauri's fetch, not the webview's: the dev webview origin (localhost:3002)
+	// is not in the server's CORS allowlist, so a browser fetch is blocked.
+	const res = await fetch(url);
+	if (!res.ok || !res.headers.get("content-type")?.includes("json")) {
+		console.warn(
+			`Sign-in bypass unavailable: ${res.status} ${res.headers.get("content-type")}`,
+		);
+		return false;
+	}
+	await processAuthData(paramsValidator.parse(await res.json()), {
+		upgraded: true,
+		manual: true,
+		last_checked: Math.floor(Date.now() / 1000),
+	});
+	return true;
+}
+
 export function createSignInMutation() {
 	return createMutation(() => ({
 		mutationFn: async (abort: AbortController) => {
-			const session = (await shouldUseLocalServerSession())
-				? await createLocalServerSession(abort.signal)
-				: await createHybridDesktopSession(abort.signal);
+			if (bypassSignIn && (await signInWithoutBrowser())) return;
 
-			await shell.open(session.url.toString());
+			const deepLink = await startDeepLinkSession(abort.signal);
 
-			const res = await session.complete();
+			await shell.open((await createSessionRequestUrl()).toString());
+
+			const res = await deepLink.complete;
+			await deepLink.dispose();
+			if (abort.signal.aborted) throw new Error("Sign in aborted");
 			if (res) await processAuthData(res);
 
 			getCurrentWindow().setFocus();
@@ -44,130 +67,10 @@ export function createSignInMutation() {
 	}));
 }
 
-async function getConfiguredServerUrl() {
-	return (
-		(await generalSettingsStore.get())?.serverUrl ?? clientEnv.VITE_SERVER_URL
-	);
-}
-
-async function shouldUseLocalServerSession() {
-	const serverUrl = await getConfiguredServerUrl();
-	return shouldUseLocalServerSessionForUrl(
-		serverUrl,
-		clientEnv.VITE_SERVER_URL,
-		import.meta.env.DEV,
-	);
-}
-
-async function createSessionRequestUrl(
-	port: string | null,
-	platform: "web" | "desktop",
-) {
-	const serverUrl = await getConfiguredServerUrl();
-	const callbackUrl = new URL(
-		`/api/desktop/session/request?type=api_key`,
-		serverUrl,
-	);
-
-	if (port !== null) callbackUrl.searchParams.set("port", port);
-	callbackUrl.searchParams.set("platform", platform);
-
-	return callbackUrl;
-}
-
-async function createLocalServerSession(signal: AbortSignal) {
-	const localCallback = await startLocalCallbackSession(signal);
-
-	return {
-		url: await createSessionRequestUrl(localCallback.port, "web"),
-		complete: async () => {
-			const result = await localCallback.complete;
-			await localCallback.dispose();
-
-			if (!result) return null;
-			if (signal.aborted) throw new Error("Sign in aborted");
-
-			return result;
-		},
-	};
-}
-
-async function createHybridDesktopSession(signal: AbortSignal) {
-	const deepLink = await startDeepLinkSession(signal);
-	const localCallback = await startLocalCallbackSession(signal);
-
-	return {
-		url: await createSessionRequestUrl(localCallback.port, "desktop"),
-		complete: async () => {
-			const result = await Promise.race([
-				deepLink.complete.then((data) => ({
-					source: "deep-link" as const,
-					data,
-				})),
-				localCallback.complete.then((data) => ({
-					source: "local" as const,
-					data,
-				})),
-			]);
-
-			await deepLink.dispose();
-			await localCallback.dispose();
-
-			if (!result.data) return null;
-			if (signal.aborted) throw new Error("Sign in aborted");
-
-			return result.data;
-		},
-	};
-}
-
-async function startLocalCallbackSession(signal: AbortSignal) {
-	await invoke("plugin:oauth|stop").catch(() => {});
-
-	const port: string = await invoke("plugin:oauth|start", {
-		config: {
-			response: callbackTemplate,
-			headers: {
-				"Content-Type": "text/html; charset=utf-8",
-				"Cache-Control": "no-store, no-cache, must-revalidate",
-				Pragma: "no-cache",
-			},
-			cleanup: true,
-		},
-	});
-
-	let settled = false;
-	let stopListening: (() => void) | undefined;
-	let resolvePromise: (data: AuthParams | null) => void = () => {};
-
-	const complete = new Promise<AuthParams | null>((resolve) => {
-		resolvePromise = resolve;
-	});
-
-	const settle = (value: AuthParams | null) => {
-		if (settled) return;
-		settled = true;
-		resolvePromise(value);
-	};
-
-	stopListening = await listen("oauth://url", (data: { payload: string }) => {
-		if (!(data.payload.includes("token") || data.payload.includes("api_key"))) {
-			return;
-		}
-
-		settle(parseAuthParams(new URL(data.payload)));
-	});
-
-	const dispose = async () => {
-		stopListening?.();
-		stopListening = undefined;
-		settle(null);
-		await invoke("plugin:oauth|stop").catch(() => {});
-	};
-
-	signal.addEventListener("abort", () => void dispose(), { once: true });
-
-	return { port, complete, dispose };
+async function createSessionRequestUrl() {
+	const serverUrl =
+		(await generalSettingsStore.get())?.serverUrl ?? clientEnv.VITE_SERVER_URL;
+	return new URL("/api/desktop/session/request?type=api_key", serverUrl);
 }
 
 async function startDeepLinkSession(signal: AbortSignal) {
@@ -215,7 +118,10 @@ function parseAuthParams(url: URL) {
 	);
 }
 
-async function processAuthData(data: AuthParams) {
+async function processAuthData(
+	data: AuthParams,
+	plan: AuthStore["plan"] = null,
+) {
 	identifyUser(data.user_id);
 	trackEvent("user_signed_in", { platform: "desktop" });
 
@@ -225,7 +131,7 @@ async function processAuthData(data: AuthParams) {
 				? { api_key: data.api_key }
 				: { token: data.token, expires: data.expires },
 		user_id: data.user_id,
-		plan: null,
+		plan,
 	});
 
 	await commands.updateAuthPlan();

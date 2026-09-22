@@ -1541,7 +1541,6 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-http",
  "tauri-plugin-notification",
- "tauri-plugin-oauth",
  "tauri-plugin-opener",
  "tauri-plugin-os",
  "tauri-plugin-positioner",
@@ -10658,20 +10657,6 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.16",
  "time",
- "url",
-]
-
-[[package]]
-name = "tauri-plugin-oauth"
-version = "2.0.0"
-source = "git+https://github.com/FabianLars/tauri-plugin-oauth?branch=v2#f941c99c3ed528a55db7fe05c931480a8255041d"
-dependencies = [
- "httparse",
- "log",
- "serde",
- "tauri",
- "tauri-plugin",
- "thiserror 1.0.69",
  "url",
 ]
 

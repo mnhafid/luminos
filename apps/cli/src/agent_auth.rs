@@ -4,7 +4,6 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 
 use crate::{
@@ -146,100 +145,28 @@ const fn should_delete_persistent_credentials(source: AgentCredentialSource) -> 
     )
 }
 
-async fn wait_for_callback(
-    listener: tokio::net::TcpListener,
-    expected_state: &str,
-    timeout: Duration,
-) -> Result<String, String> {
-    let (mut stream, _) = tokio::time::timeout(timeout, listener.accept())
-        .await
-        .map_err(|_| "Timed out waiting for browser approval".to_string())?
-        .map_err(|error| format!("Failed to receive browser approval: {error}"))?;
-    let mut buffer = Vec::new();
-    loop {
-        let mut chunk = [0_u8; 1_024];
-        let length = stream
-            .read(&mut chunk)
-            .await
-            .map_err(|error| format!("Failed to read browser approval: {error}"))?;
-        if length == 0 {
-            return Err("Browser approval ended before the request was complete".to_string());
-        }
-        buffer.extend_from_slice(&chunk[..length]);
-        if buffer.len() > 16 * 1024 {
-            return Err("Browser approval request was too large".to_string());
-        }
-        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
+const OOB_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
+
+async fn read_authorization_code(timeout: Duration) -> Result<String, String> {
+    eprintln!("Paste the authorization code shown in the browser, then press Enter:");
+    let line = tokio::time::timeout(
+        timeout,
+        tokio::task::spawn_blocking(|| {
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map(|_| line)
+                .map_err(|error| format!("Failed to read the authorization code: {error}"))
+        }),
+    )
+    .await
+    .map_err(|_| "Timed out waiting for the authorization code".to_string())?
+    .map_err(|error| error.to_string())??;
+    let code = line.trim();
+    if code.is_empty() {
+        return Err("No authorization code was provided".to_string());
     }
-    let request = std::str::from_utf8(&buffer)
-        .map_err(|_| "Browser approval was not valid HTTP".to_string())?;
-    let request_line = request
-        .lines()
-        .next()
-        .ok_or_else(|| "Browser approval was not valid HTTP".to_string())?;
-    let method = request_line
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| "Browser approval was not valid HTTP".to_string())?;
-    if method != "GET" {
-        let body = "Authorization request used an invalid HTTP method.\n";
-        let response = format!(
-            "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .map_err(|error| error.to_string())?;
-        return Err("Browser approval used an invalid HTTP method".to_string());
-    }
-    let target = request_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| "Browser approval was not valid HTTP".to_string())?;
-    let callback = Url::parse(&format!("http://127.0.0.1{target}"))
-        .map_err(|_| "Browser approval callback was invalid".to_string())?;
-    if callback.path() != "/callback" {
-        return Err("Browser approval callback had an invalid path".to_string());
-    }
-    let state = callback
-        .query_pairs()
-        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
-        .ok_or_else(|| "Browser approval callback did not include state".to_string())?;
-    if state != expected_state {
-        return Err("Browser approval state did not match".to_string());
-    }
-    if let Some(error) = callback
-        .query_pairs()
-        .find_map(|(key, value)| (key == "error").then(|| value.into_owned()))
-    {
-        let body = "Authorization was cancelled.\n";
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .map_err(|write_error| write_error.to_string())?;
-        return Err(format!("Authorization was declined: {error}"));
-    }
-    let code = callback
-        .query_pairs()
-        .find_map(|(key, value)| (key == "code").then(|| value.into_owned()))
-        .ok_or_else(|| "Browser approval callback did not include a code".to_string())?;
-    let body = "Authorization complete. You can close this window.\n";
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream
-        .write_all(response.as_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(code)
+    Ok(code.to_string())
 }
 
 impl LoginArgs {
@@ -258,14 +185,6 @@ impl LoginArgs {
         if self.timeout == 0 || self.timeout > 900 {
             return Err("--timeout must be between 1 and 900 seconds".to_string());
         }
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|error| format!("Failed to create the login callback: {error}"))?;
-        let port = listener
-            .local_addr()
-            .map_err(|error| error.to_string())?
-            .port();
-        let redirect_uri = format!("http://127.0.0.1:{port}/callback");
         let verifier = random_base64url();
         let state = random_base64url();
         let server = credentials::agent_server_url()?;
@@ -274,7 +193,7 @@ impl LoginArgs {
         authorize_url
             .query_pairs_mut()
             .append_pair("client_id", "cap-cli")
-            .append_pair("redirect_uri", &redirect_uri)
+            .append_pair("redirect_uri", OOB_REDIRECT_URI)
             .append_pair("response_type", "code")
             .append_pair("state", &state)
             .append_pair("code_challenge", &code_challenge(&verifier))
@@ -285,18 +204,16 @@ impl LoginArgs {
             eprintln!("Open this URL to authorize Cap CLI:\n{authorize_url}");
         } else if let Err(error) = open::that(authorize_url.as_str()) {
             eprintln!("Could not open a browser ({error}). Open this URL:\n{authorize_url}");
-        } else {
-            eprintln!("Waiting for browser approval...");
         }
 
-        let code = wait_for_callback(listener, &state, Duration::from_secs(self.timeout)).await?;
+        let code = read_authorization_code(Duration::from_secs(self.timeout)).await?;
         let client = auth_client()?;
         let response = client
             .post(format!("{server}/api/v1/auth/token"))
             .json(&TokenRequest {
                 code: &code,
                 code_verifier: &verifier,
-                redirect_uri: &redirect_uri,
+                redirect_uri: OOB_REDIRECT_URI,
             })
             .send()
             .await
@@ -468,52 +385,5 @@ mod tests {
         assert!(should_delete_persistent_credentials(
             AgentCredentialSource::File
         ));
-    }
-
-    #[tokio::test]
-    async fn callback_accepts_fragmented_loopback_requests() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let callback = tokio::spawn(wait_for_callback(
-            listener,
-            "expected_state",
-            Duration::from_secs(2),
-        ));
-        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
-        client
-            .write_all(b"GET /callback?state=expected_state")
-            .await
-            .unwrap();
-        tokio::task::yield_now().await;
-        client
-            .write_all(b"&code=one_time_code HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-            .await
-            .unwrap();
-        assert_eq!(callback.await.unwrap().unwrap(), "one_time_code");
-    }
-
-    #[tokio::test]
-    async fn callback_rejects_non_get_requests_with_http_response() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let callback = tokio::spawn(wait_for_callback(
-            listener,
-            "expected_state",
-            Duration::from_secs(2),
-        ));
-        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
-        client
-            .write_all(b"POST /callback HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-            .await
-            .unwrap();
-        let mut response = String::new();
-        client.read_to_string(&mut response).await.unwrap();
-        assert!(response.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"));
-        assert!(response.contains("\r\nAllow: GET\r\n"));
-        assert!(response.ends_with("Authorization request used an invalid HTTP method.\n"));
-        assert_eq!(
-            callback.await.unwrap().unwrap_err(),
-            "Browser approval used an invalid HTTP method"
-        );
     }
 }

@@ -5,12 +5,12 @@ import { agentApiAuthorizationCodes } from "@cap/database/schema";
 import { Logo } from "@cap/ui";
 import { redirect } from "next/navigation";
 import {
-	buildAgentCallbackUrl,
 	createAgentAuthorizationCode,
 	hashAgentSecret,
 	parseAgentAuthorizationRequest,
 } from "@/lib/agent-auth";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { AuthorizeForm, type AuthorizeState } from "./AuthorizeForm";
 
 export const dynamic = "force-dynamic";
 
@@ -78,7 +78,10 @@ export default async function CliAuthorizePage(props: {
 		);
 	}
 
-	async function approve(formData: FormData) {
+	async function approve(
+		_previous: AuthorizeState,
+		formData: FormData,
+	): Promise<AuthorizeState> {
 		"use server";
 		const submitted = parseAgentAuthorizationRequest({
 			client_id: formData.get("clientId")?.toString(),
@@ -89,7 +92,7 @@ export default async function CliAuthorizePage(props: {
 			code_challenge_method: "S256",
 			scope: formData.get("scope")?.toString(),
 		});
-		if (!submitted) throw new Error("Invalid authorization request");
+		if (!submitted) return { error: "Invalid authorization request" };
 		const currentUser = await getCurrentUser();
 		if (!currentUser) {
 			redirect("/login");
@@ -99,7 +102,7 @@ export default async function CliAuthorizePage(props: {
 				key: `agent-authorization:${currentUser.id}`,
 			})
 		) {
-			throw new Error("Too many authorization attempts. Try again later.");
+			return { error: "Too many authorization attempts. Try again later." };
 		}
 		const code = createAgentAuthorizationCode();
 		await db()
@@ -113,18 +116,8 @@ export default async function CliAuthorizePage(props: {
 				scopes: submitted.scopes,
 				expiresAt: new Date(Date.now() + 5 * 60 * 1000),
 			});
-		const callback = buildAgentCallbackUrl(submitted.redirectUri, {
-			state: submitted.state,
-			code,
-		});
-		if (!callback) throw new Error("Invalid callback URL");
-		redirect(callback);
+		return { code };
 	}
-
-	const deniedCallback = buildAgentCallbackUrl(request.redirectUri, {
-		state: request.state,
-		error: "access_denied",
-	});
 
 	return (
 		<main className="flex min-h-screen items-center justify-center bg-gray-2 px-6">
@@ -144,29 +137,7 @@ export default async function CliAuthorizePage(props: {
 						</li>
 					))}
 				</ul>
-				<form action={approve} className="mt-8 space-y-3">
-					<input name="clientId" type="hidden" value={request.clientId} />
-					<input name="redirectUri" type="hidden" value={request.redirectUri} />
-					<input name="state" type="hidden" value={request.state} />
-					<input
-						name="codeChallenge"
-						type="hidden"
-						value={request.codeChallenge}
-					/>
-					<input name="scope" type="hidden" value={request.scopes.join(" ")} />
-					<button
-						className="w-full rounded-lg bg-blue-9 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-10"
-						type="submit"
-					>
-						Authorize
-					</button>
-					<a
-						className="block w-full rounded-lg border border-gray-5 px-4 py-3 text-center text-sm font-medium text-gray-11 transition-colors hover:bg-gray-2"
-						href={deniedCallback ?? "/"}
-					>
-						Cancel
-					</a>
-				</form>
+				<AuthorizeForm action={approve} request={request} />
 				<p className="mt-6 text-xs leading-5 text-gray-9">
 					Signed in as {user.email}. The CLI never receives your password.
 				</p>

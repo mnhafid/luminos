@@ -91,23 +91,10 @@ type AuthorizationParams = Record<string, string | string[] | undefined>;
 const single = (value: string | string[] | undefined) =>
 	typeof value === "string" ? value : null;
 
-export const isAgentLoopbackRedirectUri = (value: string) => {
-	try {
-		const url = new URL(value);
-		return (
-			url.protocol === "http:" &&
-			(url.hostname === "127.0.0.1" || url.hostname === "[::1]") &&
-			url.port.length > 0 &&
-			url.pathname === "/callback" &&
-			url.username.length === 0 &&
-			url.password.length === 0 &&
-			url.search.length === 0 &&
-			url.hash.length === 0
-		);
-	} catch {
-		return false;
-	}
-};
+export const AGENT_OOB_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob";
+
+export const isAgentOobRedirectUri = (value: string) =>
+	value === AGENT_OOB_REDIRECT_URI;
 
 export const isAgentState = (value: string) =>
 	value.length >= 43 && value.length <= 128 && /^[A-Za-z0-9_-]+$/.test(value);
@@ -147,7 +134,7 @@ export const parseAgentAuthorizationRequest = (
 	if (
 		clientId !== "cap-cli" ||
 		!redirectUri ||
-		!isAgentLoopbackRedirectUri(redirectUri) ||
+		!isAgentOobRedirectUri(redirectUri) ||
 		responseType !== "code" ||
 		!state ||
 		!isAgentState(state) ||
@@ -183,18 +170,3 @@ export const createAgentAuthorizationCode = () =>
 
 export const createAgentAccessToken = () =>
 	`cap_cli_${randomBytes(32).toString("base64url")}`;
-
-export const buildAgentCallbackUrl = (
-	redirectUri: string,
-	params: { state: string; code?: string; error?: "access_denied" },
-) => {
-	if (!isAgentLoopbackRedirectUri(redirectUri) || !isAgentState(params.state)) {
-		return null;
-	}
-	if ((params.code ? 1 : 0) + (params.error ? 1 : 0) !== 1) return null;
-	const url = new URL(redirectUri);
-	url.searchParams.set("state", params.state);
-	if (params.code) url.searchParams.set("code", params.code);
-	if (params.error) url.searchParams.set("error", params.error);
-	return url.toString();
-};

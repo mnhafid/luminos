@@ -84,7 +84,7 @@ describe("agent API handler", () => {
 				body: JSON.stringify({
 					code: "c".repeat(43),
 					codeVerifier: "v".repeat(43),
-					redirectUri: "http://127.0.0.1:49152/callback",
+					redirectUri: "urn:ietf:wg:oauth:2.0:oob",
 				}),
 			}),
 		);

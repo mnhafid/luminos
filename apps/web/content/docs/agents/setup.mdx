@@ -68,7 +68,7 @@ Cap CLI credentials are stored by the operating system when available. For machi
 
 ## Headless environments (CI, containers, and remote sandboxes)
 
-`cap auth login` opens a browser on the same machine, so it does not work on headless runners. Mint an API key from the Cap dashboard instead:
+`cap auth login` needs an interactive terminal to paste the authorization code into (use `--no-open` to print the URL and open it on another machine). For fully non-interactive runners, mint an API key from the Cap dashboard instead:
 
 1. Open [Settings, then Account](https://cap.so/dashboard/settings/account) in the Cap dashboard and find **Cap CLI access**.
 2. Choose **Create API key**, then pick a name, an access profile (`creator`, `admin`, or `full`, the same profiles as `cap auth login`), and an expiry.

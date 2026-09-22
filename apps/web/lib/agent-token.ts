@@ -10,7 +10,7 @@ import {
 	createAgentAccessToken,
 	hashAgentSecret,
 	isAgentCodeVerifier,
-	isAgentLoopbackRedirectUri,
+	isAgentOobRedirectUri,
 	verifyAgentCodeChallenge,
 } from "./agent-auth";
 
@@ -52,7 +52,7 @@ export const exchangeAgentAuthorizationCode = Effect.fn(
 		payload.code.length < 32 ||
 		payload.code.length > 128 ||
 		!isAgentCodeVerifier(payload.codeVerifier) ||
-		!isAgentLoopbackRedirectUri(payload.redirectUri)
+		!isAgentOobRedirectUri(payload.redirectUri)
 	) {
 		return yield* invalidGrant(requestId);
 	}

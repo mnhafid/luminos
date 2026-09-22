@@ -1469,7 +1469,7 @@ agentE2e("Cap agent local Docker E2E", () => {
 		const verifier = randomBytes(32).toString("base64url");
 		const challenge = createHash("sha256").update(verifier).digest("base64url");
 		const code = randomBytes(32).toString("base64url");
-		const redirectUri = "http://127.0.0.1:45678/callback";
+		const redirectUri = "urn:ietf:wg:oauth:2.0:oob";
 		await connection.execute(
 			`INSERT INTO agent_api_authorization_codes
 				(id, userId, codeHash, codeChallenge, redirectUri, scopes, expiresAt)
@@ -1649,8 +1649,8 @@ agentE2e("Cap agent local Docker E2E", () => {
 			`INSERT INTO agent_api_authorization_codes
 				(id, userId, codeHash, codeChallenge, redirectUri, scopes, expiresAt)
 			 VALUES
-				('cod_e2e_expired', ?, ?, ?, 'http://127.0.0.1:45678/callback', ?, DATE_SUB(NOW(), INTERVAL 1 DAY)),
-				('cod_e2e_live', ?, ?, ?, 'http://127.0.0.1:45678/callback', ?, DATE_ADD(NOW(), INTERVAL 1 DAY))`,
+				('cod_e2e_expired', ?, ?, ?, 'urn:ietf:wg:oauth:2.0:oob', ?, DATE_SUB(NOW(), INTERVAL 1 DAY)),
+				('cod_e2e_live', ?, ?, ?, 'urn:ietf:wg:oauth:2.0:oob', ?, DATE_ADD(NOW(), INTERVAL 1 DAY))`,
 			[
 				userId,
 				"c".repeat(64),

@@ -1,50 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-	resolveServerRequestPath,
-	shouldUseLocalServerSessionForUrl,
-} from "./server-url-routing";
+import { resolveServerRequestPath } from "./server-url-routing";
 
 describe("server-url-routing", () => {
-	it("keeps production Cap Cloud on the hybrid desktop session", () => {
-		expect(
-			shouldUseLocalServerSessionForUrl(
-				"https://cap.so",
-				"https://cap.so",
-				false,
-			),
-		).toBe(false);
-	});
-
-	it("treats equivalent Cap Cloud origins as the same production auth path", () => {
-		expect(
-			shouldUseLocalServerSessionForUrl(
-				"https://cap.so/",
-				"https://cap.so",
-				false,
-			),
-		).toBe(false);
-	});
-
-	it("uses the local callback session for custom production origins", () => {
-		expect(
-			shouldUseLocalServerSessionForUrl(
-				"https://cap-web-production-7301.up.railway.app",
-				"https://cap.so",
-				false,
-			),
-		).toBe(true);
-	});
-
-	it("keeps development on the local callback session", () => {
-		expect(
-			shouldUseLocalServerSessionForUrl(
-				"https://cap.so",
-				"https://cap.so",
-				true,
-			),
-		).toBe(true);
-	});
-
 	it("does not rewrite Cap Cloud API requests for the default origin", () => {
 		const path = "https://cap.so/api/desktop/user/profile";
 
