@@ -322,7 +322,7 @@ impl WindowImpl {
     pub fn from_id(id: &WindowIdImpl) -> Option<Self> {
         let windows =
             core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, id.0)?;
-        (windows.len() > 0).then_some(WindowImpl(id.0))
+        (!windows.is_empty()).then_some(WindowImpl(id.0))
     }
 
     pub fn list_containing_cursor() -> Vec<Self> {

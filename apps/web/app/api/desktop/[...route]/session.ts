@@ -47,7 +47,7 @@ app.get(
 			| { type: "token"; token: string; expires: string }
 			| { type: "api_key"; api_key: string };
 
-		if (type === "session" && !user.local) {
+		if (type === "session" && !("local" in user)) {
 			const token = getCookie(c, "next-auth.session-token");
 			if (token === undefined) return c.redirect(loginRedirectUrl);
 
