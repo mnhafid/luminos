@@ -8,6 +8,14 @@ on:
         required: false
         default: "latest"
         type: string
+      web_url:
+        description: >-
+          Public URL of the deployment. It is baked into the client bundle at
+          build time, because NEXT_PUBLIC_WEB_URL is a build value in Next.js.
+          It cannot be changed by a runtime environment variable later.
+        required: false
+        default: "http://localhost:3000"
+        type: string
 
 jobs:
   build:
@@ -34,7 +42,10 @@ jobs:
 
       - name: Create .env file
         run: |
-          echo "WEB_URL=http://localhost:3000" > .env
+          # packages/env/build.ts reads WEB_URL first, then falls back to
+          # NEXT_PUBLIC_WEB_URL. So this line, not the ENV in the Dockerfile,
+          # decides what the client bundle carries.
+          echo "WEB_URL=${{ inputs.web_url || 'http://localhost:3000' }}" > .env
           echo "NEXT_PUBLIC_DOCKER_BUILD=true" >> .env
 
       - name: Login to GitHub Container Registry
