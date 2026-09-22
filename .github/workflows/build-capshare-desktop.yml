@@ -22,9 +22,12 @@ on:
 
 jobs:
   build:
-    # Apple Silicon runner; 7 GB RAM, so cargo is capped at 3 jobs below.
+    # Apple Silicon runner; 7 GB RAM, so cargo is capped at 3 jobs below and
+    # the workspace release profile (fat LTO, codegen-units=1, full debuginfo)
+    # is relaxed for the final link: with it the link swapped for 2 hours and
+    # hit the timeout. Thin LTO + no debuginfo links in minutes.
     runs-on: macos-14
-    timeout-minutes: 180
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -61,6 +64,9 @@ jobs:
         working-directory: apps/desktop
         env:
           CARGO_BUILD_JOBS: 3
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_DEBUG: 0
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           RUST_TARGET_TRIPLE: ${{ inputs.target }}
         run: >
           pnpm build:tauri --target ${{ inputs.target }}
