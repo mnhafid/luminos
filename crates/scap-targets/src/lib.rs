@@ -144,7 +144,17 @@ impl Window {
     }
 
     pub fn from_id(id: &WindowId) -> Option<Self> {
-        Self::list().into_iter().find(|d| &d.id() == id)
+        // `list()` is on-screen-only, so a target on another Space (or behind
+        // a fullscreen app on a second display) would vanish between selection
+        // and recording start. macOS can look a window up directly.
+        #[cfg(target_os = "macos")]
+        {
+            WindowImpl::from_id(&id.0).map(Self)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self::list().into_iter().find(|d| &d.id() == id)
+        }
     }
 
     pub fn physical_size(&self) -> Option<PhysicalSize> {

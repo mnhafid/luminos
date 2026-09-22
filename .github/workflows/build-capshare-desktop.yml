@@ -1,0 +1,75 @@
+# Unsigned macOS bundle of Cap Desktop pointed at a self-hosted server.
+# Same steps as the macOS leg of desktop-release.yml minus Apple signing,
+# notarization, CrabNebula upload, and the Tauri updater key. The result is
+# a dev-identifier app ("Cap - Development", so.cap.desktop.dev) that installs
+# next to a production Cap. Gatekeeper will ask to allow it on first open.
+name: Build capshare desktop (macOS, unsigned)
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: Web server the app talks to and builds share links from
+        default: https://capshare.escekek.club
+        required: true
+      target:
+        description: Rust target triple
+        type: choice
+        default: aarch64-apple-darwin
+        options:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+
+jobs:
+  build:
+    # Apple Silicon runner; 7 GB RAM, so cargo is capped at 3 jobs below.
+    runs-on: macos-14
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ inputs.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ inputs.target }}
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Create .env file in root
+        run: |
+          {
+            echo "VITE_ENVIRONMENT=production"
+            echo "VITE_SERVER_URL=${{ inputs.server_url }}"
+            echo "NEXT_PUBLIC_WEB_URL=${{ inputs.server_url }}"
+            echo "NEXTAUTH_URL=${{ inputs.server_url }}"
+            echo "RUST_TARGET_TRIPLE=${{ inputs.target }}"
+          } >> .env
+
+      - name: Run cap-setup
+        run: pnpm -w cap-setup
+        env:
+          RUST_TARGET_TRIPLE: ${{ inputs.target }}
+
+      - name: Build desktop binaries
+        run: ./scripts/build-desktop-binaries.sh ${{ inputs.target }}
+
+      - name: Build bundle
+        working-directory: apps/desktop
+        env:
+          CARGO_BUILD_JOBS: 3
+          RUST_TARGET_TRIPLE: ${{ inputs.target }}
+        run: >
+          pnpm build:tauri --target ${{ inputs.target }}
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cap-desktop-${{ inputs.target }}
+          path: |
+            target/${{ inputs.target }}/release/bundle/dmg/*.dmg
+            target/${{ inputs.target }}/release/bundle/macos/*.app
+          if-no-files-found: error

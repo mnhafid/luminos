@@ -318,6 +318,13 @@ impl WindowImpl {
         ret
     }
 
+    /// Direct lookup, regardless of whether the window is on the active Space.
+    pub fn from_id(id: &WindowIdImpl) -> Option<Self> {
+        let windows =
+            core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, id.0)?;
+        (windows.len() > 0).then_some(WindowImpl(id.0))
+    }
+
     pub fn list_containing_cursor() -> Vec<Self> {
         let Some(cursor) = get_cursor_position() else {
             return vec![];
@@ -659,5 +666,18 @@ impl FromStr for WindowIdImpl {
         s.parse()
             .map(Self)
             .map_err(|_| "Invalid window ID".to_string())
+    }
+}
+
+#[cfg(test)]
+mod from_id_tests {
+    use super::*;
+
+    #[test]
+    fn from_id_finds_listed_windows_and_rejects_unknown_ids() {
+        if let Some(window) = WindowImpl::list().first() {
+            assert!(WindowImpl::from_id(&window.id()).is_some());
+        }
+        assert!(WindowImpl::from_id(&WindowIdImpl(u32::MAX)).is_none());
     }
 }

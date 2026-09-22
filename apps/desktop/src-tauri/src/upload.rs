@@ -1804,23 +1804,35 @@ impl SegmentUploader {
 
             {
                 let mut signal_ok = false;
-                for attempt in 0..3u32 {
+                let mut attempt = 0u32;
+                loop {
                     match api::signal_recording_complete(&app, &video_id).await {
                         Ok(()) => {
                             signal_ok = true;
                             break;
                         }
                         Err(e) => {
-                            warn!(
-                                attempt = attempt + 1,
-                                "Failed to signal recording complete: {e}"
-                            );
-                            if attempt < 2 {
+                            attempt += 1;
+                            warn!(attempt, "Failed to signal recording complete: {e}");
+                            // The server answers 503 `source-commit-pending` (Retry-After: 5)
+                            // while it inventories the uploaded segments, which takes
+                            // 10-30s. That is "keep waiting", not a failure: polling here
+                            // beats retaining the upload and re-sending every segment.
+                            // ponytail: fixed 5s cadence, 2 min ceiling; read Retry-After if
+                            // the server ever varies it.
+                            let pending = e.to_string().contains("source-commit-pending");
+                            if pending && attempt < 24 {
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                                continue;
+                            }
+                            if !pending && attempt < 3 {
                                 tokio::time::sleep(Duration::from_millis(
-                                    1000 * (1 << attempt) as u64,
+                                    1000 * (1 << (attempt - 1)) as u64,
                                 ))
                                 .await;
+                                continue;
                             }
+                            break;
                         }
                     }
                 }
